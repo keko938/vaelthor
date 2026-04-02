@@ -3,107 +3,179 @@ import json
 import time
 import random
 import requests
+import xml.etree.ElementTree as ET
 from datetime import datetime
-from pytrends.request import TrendReq
 
 AFFILIATE_ID = os.environ.get("AFFILIATE_ID", "ranktuga-21")
 DATA_FILE = "dravek_data.json"
 
-CATEGORIES = {
-    "Air Fryers": [
-        "air fryer", "fritadeira sem oleo", "airfryer philips",
-        "air fryer lidl", "melhor air fryer", "air fryer cosori",
-        "air fryer tefal", "air fryer ninja", "air fryer barata",
-        "air fryer portugal"
-    ],
-    "Aspiradores Robo": [
-        "aspirador robo", "roomba", "aspirador robot xiaomi",
-        "aspirador robot lidl", "melhor aspirador robo",
-        "aspirador robot barato", "aspirador robot portugal",
-        "robot aspirador conga", "aspirador robo 2024",
-        "aspirador robot com mopa"
-    ],
-    "Robots de Cozinha": [
-        "robot de cozinha", "bimby", "monsieur cuisine",
-        "robot cozinha lidl", "melhor robot cozinha",
-        "robot cozinha barato", "robot cozinha portugal",
-        "thermomix", "robot cozinha moulinex",
-        "robot cozinha tefal"
-    ],
-    "Produtos para Bebe": [
-        "carrinho bebe", "cadeirinha auto bebe", "berco bebe",
-        "monitor bebe", "banheira bebe", "chupeta bebe",
-        "fraldas bebe", "roupa bebe", "brinquedos bebe",
-        "mochila bebe"
-    ],
-    "Racoes para Animais": [
-        "racao cao", "racao gato", "melhor racao cao",
-        "racao cao barata", "comida humida gato",
-        "snacks cao", "racao cachorro",
-        "racao gato castrado", "racao cao adulto",
-        "racao peixe aquario"
-    ]
+# RSS feeds de bestsellers da Amazon.es por categoria
+CATEGORY_FEEDS = {
+    "Air Fryers": "https://www.amazon.es/gp/bestsellers/kitchen/3638504031/ref=zg_bs_pg_1_kitchen?ie=UTF8&pg=1",
+    "Aspiradores Robo": "https://www.amazon.es/gp/bestsellers/kitchen/3638455031/ref=zg_bs_pg_1?ie=UTF8&pg=1",
+    "Robots de Cozinha": "https://www.amazon.es/gp/bestsellers/kitchen/3638552031/ref=zg_bs_pg_1?ie=UTF8&pg=1",
+    "Produtos para Bebe": "https://www.amazon.es/gp/bestsellers/baby/ref=zg_bs_baby_sm?ie=UTF8&pg=1",
+    "Racoes para Animais": "https://www.amazon.es/gp/bestsellers/pet-supplies/ref=zg_bs_pet-supplies_sm?ie=UTF8&pg=1"
 }
 
-def get_trends(category_name, keywords):
+# Keywords de pesquisa para cada categoria (fallback)
+CATEGORY_SEARCH = {
+    "Air Fryers": "air+fryer",
+    "Aspiradores Robo": "aspiradora+robot",
+    "Robots de Cozinha": "robot+cocina+multifuncion",
+    "Produtos para Bebe": "productos+bebe+recien+nacido",
+    "Racoes para Animais": "pienso+perros+gatos"
+}
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept-Language": "es-ES,es;q=0.9,pt;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+def scrape_bestsellers(category_name, url):
+    """Extrai bestsellers da página da Amazon."""
+    import re
     try:
-        pytrends = TrendReq(hl='pt-PT', tz=0, timeout=(10, 25), retries=2, backoff_factor=0.5)
-        results = []
-        chunks = [keywords[i:i+5] for i in range(0, len(keywords), 5)]
+        session = requests.Session()
+        # Cookie inicial
+        session.get("https://www.amazon.es", headers=HEADERS, timeout=10)
+        time.sleep(random.uniform(2, 4))
 
-        for chunk in chunks:
-            try:
-                pytrends.build_payload(chunk, timeframe='today 3-m', geo='PT')
-                df = pytrends.interest_over_time()
-                if df.empty:
-                    continue
-                for kw in chunk:
-                    if kw in df.columns:
-                        avg = int(df[kw].mean())
-                        if avg > 0:
-                            results.append({
-                                "keyword": kw,
-                                "interest": avg,
-                                "category": category_name,
-                                "url": f"https://www.amazon.es/s?k={kw.replace(' ', '+')}&tag={AFFILIATE_ID}",
-                                "date": datetime.now().strftime("%Y-%m-%d")
-                            })
-                time.sleep(random.uniform(3, 6))
-            except Exception as e:
-                print(f"Erro chunk {chunk}: {e}")
-                continue
+        response = session.get(url, headers=HEADERS, timeout=15)
+        if response.status_code != 200:
+            return []
 
-        results.sort(key=lambda x: x["interest"], reverse=True)
-        for i, r in enumerate(results):
-            r["rank"] = i + 1
-        return results[:20]
+        html = response.text
+        products = []
+
+        # Extrai ASINs da página de bestsellers
+        asins = list(dict.fromkeys(re.findall(r'data-asin="([A-Z0-9]{10})"', html)))
+
+        # Extrai títulos
+        titles = re.findall(
+            r'<div class="p13n-sc-truncate[^"]*"[^>]*>\s*(.*?)\s*</div>',
+            html, re.DOTALL
+        )
+        titles = [re.sub(r'<[^>]+>', '', t).strip() for t in titles if t.strip()]
+
+        # Extrai preços
+        prices = re.findall(r'<span class="p13n-sc-price">(.*?)</span>', html)
+
+        # Extrai avaliações
+        ratings = re.findall(r'(\d+[,.]\d+)\s*de\s*5', html)
+
+        for i, asin in enumerate(asins[:20]):
+            title = titles[i] if i < len(titles) else f"Produto #{i+1}"
+            price = prices[i].strip() if i < len(prices) else "N/D"
+            rating = ratings[i] if i < len(ratings) else "N/D"
+
+            products.append({
+                "rank": i + 1,
+                "asin": asin,
+                "title": title[:80],
+                "price": price,
+                "rating": rating,
+                "url": f"https://www.amazon.es/dp/{asin}?tag={AFFILIATE_ID}",
+                "category": category_name,
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "source": "Amazon Bestsellers"
+            })
+
+        return products
 
     except Exception as e:
-        print(f"Erro Trends {category_name}: {e}")
+        print(f"Erro bestsellers {category_name}: {e}")
+        return []
+
+def search_fallback(category_name, keyword):
+    """Pesquisa alternativa se bestsellers falhar."""
+    import re
+    try:
+        url = f"https://www.amazon.es/s?k={keyword}&tag={AFFILIATE_ID}"
+        session = requests.Session()
+        session.get("https://www.amazon.es", headers=HEADERS, timeout=10)
+        time.sleep(random.uniform(2, 4))
+
+        response = session.get(url, headers=HEADERS, timeout=15)
+        if response.status_code != 200:
+            return []
+
+        html = response.text
+        asins = list(dict.fromkeys(re.findall(r'data-asin="([A-Z0-9]{10})"', html)))
+
+        titles = []
+        for pattern in [
+            r'<span class="a-size-medium a-color-base a-text-normal">(.*?)</span>',
+            r'<span class="a-size-base-plus a-color-base a-text-normal">(.*?)</span>',
+        ]:
+            found = re.findall(pattern, html)
+            if found:
+                titles = [re.sub(r'<[^>]+>', '', t).strip() for t in found]
+                break
+
+        price_wholes = re.findall(r'<span class="a-price-whole">(\d+)', html)
+        price_decs = re.findall(r'<span class="a-price-decimal"[^>]*>(\d+)', html)
+        prices = [
+            f"{price_wholes[i]},{price_decs[i] if i < len(price_decs) else '00'}€"
+            for i in range(len(price_wholes))
+        ]
+        ratings = re.findall(r'(\d+[,.]\d+)\s*de\s*5\s*estrellas?', html)
+
+        products = []
+        for i, asin in enumerate(asins[:20]):
+            products.append({
+                "rank": i + 1,
+                "asin": asin,
+                "title": (titles[i] if i < len(titles) else f"Produto {asin}")[:80],
+                "price": prices[i] if i < len(prices) else "N/D",
+                "rating": ratings[i] if i < len(ratings) else "N/D",
+                "url": f"https://www.amazon.es/dp/{asin}?tag={AFFILIATE_ID}",
+                "category": category_name,
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "source": "Amazon Search"
+            })
+
+        return products
+
+    except Exception as e:
+        print(f"Erro fallback {category_name}: {e}")
         return []
 
 def run_all():
-    print(f"Dravek a pesquisar... {datetime.now()}")
+    print(f"Dravek v5 a pesquisar... {datetime.now()}")
     previous = load_data()
     current = {}
     total = 0
 
-    for category, keywords in CATEGORIES.items():
-        print(f"  -> {category}")
-        results = get_trends(category, keywords)
-        current[category] = results
-        total += len(results)
-        time.sleep(random.uniform(8, 15))
+    for category, url in CATEGORY_FEEDS.items():
+        print(f"  -> {category} (bestsellers)...")
+        products = scrape_bestsellers(category, url)
+
+        # Se bestsellers falhar, tenta pesquisa normal
+        if not products:
+            print(f"     Bestsellers falhou, a tentar pesquisa...")
+            keyword = CATEGORY_SEARCH.get(category, category)
+            products = search_fallback(category, keyword)
+
+        current[category] = products
+        total += len(products)
+        status = "OK" if products else "SEM DADOS"
+        print(f"     {status}: {len(products)} produtos")
+        time.sleep(random.uniform(6, 12))
 
     save_data(current)
-    print(f"Dravek concluiu. Total: {total}")
+    print(f"Dravek v5 concluiu. Total: {total}")
     return current, previous, total
 
 def run_category(name):
-    keywords = CATEGORIES.get(name, [])
-    if not keywords:
-        return []
-    return get_trends(name, keywords)
+    url = CATEGORY_FEEDS.get(name)
+    keyword = CATEGORY_SEARCH.get(name, name)
+    if url:
+        products = scrape_bestsellers(name, url)
+        if products:
+            return products
+    return search_fallback(name, keyword)
 
 def load_data():
     try:
@@ -123,41 +195,44 @@ def save_data(data):
 
 def format_report(current, previous, total):
     now = datetime.now().strftime("%d/%m %H:%M")
-    lines = [f"*Dravek — Google Trends PT | {now}*\n"]
+    lines = [f"*Dravek v5 — Amazon Bestsellers ES | {now}*\n"]
 
     if total == 0:
-        lines.append("Sem dados. Possivel limite Google Trends.")
+        lines.append(
+            "Sem dados — Amazon bloqueou todas as pesquisas.\n"
+            "Isto e normal em servidores partilhados.\n"
+            "Os dados serao obtidos quando o bloqueio levantar."
+        )
         return "\n".join(lines)
 
-    lines.append(f"Total analisado: *{total} pesquisas*\n")
+    lines.append(f"Total encontrado: *{total} produtos*\n")
 
-    for category, results in current.items():
-        if not results:
-            lines.append(f"\n *{category}* — Sem dados")
+    for category, products in current.items():
+        if not products:
+            lines.append(f"\n *{category}* — Bloqueado")
             continue
 
-        prev_kws = {r["keyword"] for r in previous.get(category, [])}
-        new = [r for r in results if r["keyword"] not in prev_kws]
+        prev_asins = {p["asin"] for p in previous.get(category, [])}
+        new = [p for p in products if p["asin"] not in prev_asins]
         new_tag = f" +{len(new)} novos" if new and previous else ""
+        source = products[0].get("source", "Amazon") if products else ""
 
-        lines.append(f"\n*{category}*{new_tag}")
-        for r in results[:5]:
-            bar = "█" * (r["interest"] // 20)
-            lines.append(f"  {r['rank']}. {r['keyword']} {bar} ({r['interest']}/100)")
-        top = results[0]["keyword"]
-        lines.append(f"  Sugestao de artigo: '{top}'")
+        lines.append(f"\n*{category}* ({len(products)}) {new_tag}")
+        lines.append(f"_Fonte: {source}_")
+        for p in products[:5]:
+            stars = f"  {p['rating']}" if p['rating'] != 'N/D' else ""
+            lines.append(f"  {p['rank']}. {p['title'][:40]}... {p['price']}{stars}")
 
     return "\n".join(lines)
 
 def get_context():
     data = load_data()
     total = sum(len(v) for v in data.values())
-    if not data:
+    if not data or total == 0:
         return "Sem dados do Dravek ainda."
-    context = "Dados Google Trends PT:\n"
-    for cat, results in data.items():
-        if results:
-            top3 = ", ".join([r["keyword"] for r in results[:3]])
-            context += f"- {cat}: {top3}\n"
-    context += f"Total: {total} palavras-chave"
+    context = f"Dravek tem {total} produtos em base de dados:\n"
+    for cat, products in data.items():
+        if products:
+            top3 = ", ".join([p['title'][:30] for p in products[:3]])
+            context += f"- {cat}: {top3}...\n"
     return context
