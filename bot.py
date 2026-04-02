@@ -6,9 +6,12 @@ from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 import dravek
 import sylvorn
+import tharnek
+import myrondis
+import kaelvris
 
 # ============================================================
-# CONFIGURAÇÕES
+# CONFIGURACOES
 # ============================================================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
@@ -16,18 +19,17 @@ CHAT_ID = os.environ.get("CHAT_ID")
 
 client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
-VAELTHOR_PROMPT = """Es o Vaelthor, o bot CEO do projeto ranktuga — site de afiliados Amazon em Portugal.
-Geres estes bots subordinados:
+VAELTHOR_PROMPT = """Es o Vaelthor, CEO do projeto ranktuga — site de afiliados Amazon em Portugal.
+A tua equipa de bots:
 - Dravek: recolhe top 20 produtos por categoria (ativo)
 - Sylvorn: cria artigos SEO em portugues europeu (ativo)
-- Tharnek: monitoriza precos (por instalar)
-- Myrondis: analisa SEO (por instalar)
-- Kaelvris: publica em redes sociais (por instalar)
+- Tharnek: monitoriza variacoes de preco (ativo)
+- Myrondis: analisa SEO dos artigos (ativo)
+- Kaelvris: cria posts para redes sociais (ativo)
 
-Respondes sempre em portugues de Portugal, direto e claro.
-Quando o utilizador pede artigos, chamas o Sylvorn.
-Quando pede pesquisas, chamas o Dravek.
-O objetivo e ter um site com artigos de comparacao de produtos que geram comissoes Amazon."""
+Todos os bots estao agora operacionais.
+Respondes em portugues de Portugal, direto e claro.
+O objetivo final: site ranktuga.com com artigos que geram comissoes Amazon automaticamente."""
 
 # ============================================================
 # TELEGRAM
@@ -57,23 +59,23 @@ def get_updates(offset=None):
         return {"result": []}
 
 # ============================================================
-# CONTEXTO DO SISTEMA
+# CONTEXTO
 # ============================================================
 def get_system_context():
-    dravek_ctx = dravek.get_context()
-    articles = sylvorn.load_articles()
-    total_articles = len(articles)
     data = dravek.load_data()
     total_products = sum(len(v) for v in data.values()) if data else 100
+    articles = sylvorn.load_articles()
+    posts = kaelvris.load_posts()
 
     return (
         f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
-        f"Bots: Vaelthor OK | Dravek OK | Sylvorn OK | Tharnek/Myrondis/Kaelvris por instalar\n"
+        f"Todos os 6 bots operacionais\n"
         f"Produtos em base: {total_products}\n"
-        f"Artigos criados: {total_articles}\n"
-        f"Site: ranktuga.com (por comprar, ~44€/ano)\n"
-        f"Afiliado Amazon ID: ranktuga-21\n"
-        f"{dravek_ctx}"
+        f"Artigos criados: {len(articles)}\n"
+        f"Posts redes sociais: {len(posts)}\n"
+        f"Site: ranktuga.com (por comprar ~44€)\n"
+        f"ID Afiliado: ranktuga-21\n"
+        f"{dravek.get_context()}"
     )
 
 def ask_vaelthor(message, extra=""):
@@ -94,11 +96,7 @@ def ask_vaelthor(message, extra=""):
 # TAREFAS AGENDADAS
 # ============================================================
 def daily_summary():
-    summary = ask_vaelthor(
-        "Gera o relatorio matinal. "
-        "Inclui: estado dos bots, artigos criados, proximos passos. "
-        "Usa emojis. Sê direto."
-    )
+    summary = ask_vaelthor("Gera o relatorio matinal completo com estado de todos os bots, artigos e proximos passos. Usa emojis.")
     send_message(f"*Relatorio Matinal — Vaelthor*\n\n{summary}")
 
 def daily_search():
@@ -106,45 +104,62 @@ def daily_search():
     report = dravek.format_report(current, previous, total)
     send_message(report)
 
+    # Tharnek verifica precos automaticamente
+    if current:
+        alerts, changes, monitored = tharnek.monitor_prices(current)
+        if alerts:
+            send_message(tharnek.format_alerts(alerts))
+
 # ============================================================
 # COMANDOS
 # ============================================================
 def process_message(text):
     cmd = text.lower().strip()
 
-    # ── INÍCIO ──────────────────────────────────────────────
+    # ── INICIO ──────────────────────────────────────────────
     if cmd in ["/start", "ola", "olá", "hi", "hello"]:
         send_message(
-            "*Vaelthor ao teu servico.*\n\n"
-            "Comandos disponiveis:\n\n"
+            "*Vaelthor — Sistema Completo Online*\n\n"
             "*Dravek (Pesquisa):*\n"
             "/pesquisar — Pesquisar top produtos\n"
             "/top — Ver top 5 por categoria\n\n"
             "*Sylvorn (Artigos):*\n"
-            "/artigo — Criar artigo de comparacao\n"
-            "/review — Criar review de produto especifico\n"
+            "/artigo — Menu de criacao de artigos\n"
             "/artigos — Ver artigos criados\n"
-            "/ultimoartigo — Ver conteudo do ultimo artigo\n\n"
+            "/ultimoartigo — Ver ultimo artigo\n\n"
+            "*Tharnek (Precos):*\n"
+            "/precos — Verificar alteracoes de preco\n\n"
+            "*Myrondis (SEO):*\n"
+            "/seo — Analisar SEO do ultimo artigo\n"
+            "/keywords — Ver palavras-chave por categoria\n\n"
+            "*Kaelvris (Redes Sociais):*\n"
+            "/posts — Criar posts para redes sociais\n"
+            "/verpost — Ver ultimo post criado\n\n"
             "*Geral:*\n"
-            "/resumo — Estado do projeto\n"
+            "/resumo — Estado completo\n"
             "/bots — Estado dos bots\n"
-            "/ajuda — Esta mensagem\n\n"
-            "_Ou faz qualquer pergunta em linguagem natural._"
+            "/ajuda — Esta mensagem"
         )
 
     # ── DRAVEK ──────────────────────────────────────────────
     elif cmd in ["/pesquisar", "/search"]:
-        send_message("*Vaelthor* — A chamar o Dravek...")
+        send_message("*Vaelthor* — Dravek a pesquisar...")
         current, previous, total = dravek.run_all()
         report = dravek.format_report(current, previous, total)
         send_message(report)
 
+        # Tharnek verifica precos automaticamente
+        if current:
+            alerts, changes, monitored = tharnek.monitor_prices(current)
+            if alerts:
+                send_message(tharnek.format_alerts(alerts))
+            else:
+                send_message(f"*Tharnek* — Precos estáveis. {monitored} produtos monitorizados.")
+
     elif cmd == "/top":
         data = dravek.load_data()
         if not data:
-            # Usa dados curados se nao ha dados guardados
-            curated = dravek.build_curated_products()
-            data = curated
+            data = dravek.build_curated_products()
         lines = ["*Top 5 por categoria (Dravek):*\n"]
         for cat, products in data.items():
             if products:
@@ -156,10 +171,8 @@ def process_message(text):
 
     # ── SYLVORN ─────────────────────────────────────────────
     elif cmd == "/artigo":
-        # Mostra menu de categorias
         send_message(
             "*Sylvorn — Criar artigo*\n\n"
-            "Escolhe uma categoria:\n\n"
             "/artigo_airfryers\n"
             "/artigo_aspiradores\n"
             "/artigo_robots\n"
@@ -169,55 +182,14 @@ def process_message(text):
 
     elif cmd == "/artigo_airfryers":
         _create_article("Air Fryers")
-
     elif cmd == "/artigo_aspiradores":
         _create_article("Aspiradores Robo")
-
     elif cmd == "/artigo_robots":
         _create_article("Robots de Cozinha")
-
     elif cmd == "/artigo_bebe":
         _create_article("Produtos para Bebe")
-
     elif cmd == "/artigo_animais":
         _create_article("Racoes para Animais")
-
-    elif cmd == "/review":
-        data = dravek.load_data()
-        if not data:
-            data = dravek.build_curated_products()
-        # Mostra os top produtos para escolher
-        lines = ["*Sylvorn — Criar review*\n\nEscolhe o produto pelo numero:\n"]
-        all_products = []
-        count = 1
-        for cat, products in data.items():
-            for p in products[:3]:
-                lines.append(f"/review_{count} — {p['title'][:45]}...")
-                all_products.append(p)
-                count += 1
-        # Guarda lista temporaria
-        _save_temp(all_products)
-        send_message("\n".join(lines[:25]))
-
-    elif cmd.startswith("/review_"):
-        try:
-            idx = int(cmd.replace("/review_", "")) - 1
-            products = _load_temp()
-            if products and 0 <= idx < len(products):
-                product = products[idx]
-                send_message(f"*Sylvorn* — A escrever review de:\n_{product['title']}_\n\nAguarda 1-2 minutos...")
-                article, filename = sylvorn.create_product_review(product)
-                if article:
-                    send_message(
-                        f"*Sylvorn* — Review criada!\n\n"
-                        f"*{article['title'][:60]}*\n"
-                        f"_{article['word_count']} palavras | {article['category']}_\n\n"
-                        f"Usa /ultimoartigo para ver o conteudo completo."
-                    )
-                else:
-                    send_message("Erro ao criar review. Tenta novamente.")
-        except (ValueError, IndexError):
-            send_message("Numero invalido. Usa /review para ver a lista.")
 
     elif cmd == "/artigos":
         send_message(sylvorn.list_articles())
@@ -225,34 +197,112 @@ def process_message(text):
     elif cmd == "/ultimoartigo":
         article = sylvorn.get_latest_article_content()
         if not article:
-            send_message("Sem artigos ainda. Usa /artigo para criar o primeiro.")
+            send_message("Sem artigos ainda. Usa /artigo.")
             return
-        # Envia metadata + preview do conteudo
-        preview = article['content'][:1500] + "\n\n_...continua (artigo completo guardado no servidor)_"
+        preview = article['content'][:1500] + "\n\n_...artigo completo no servidor_"
         send_message(
             f"*{article['title'][:60]}*\n"
             f"_{article['category']} | {article['word_count']} palavras | {article['created_at']}_\n\n"
             f"{preview}"
         )
 
+    # ── THARNEK ─────────────────────────────────────────────
+    elif cmd == "/precos":
+        send_message("*Tharnek* — A verificar precos...")
+        data = dravek.load_data()
+        if not data:
+            data = dravek.build_curated_products()
+        alerts, changes, monitored = tharnek.monitor_prices(data)
+        if alerts:
+            send_message(tharnek.format_alerts(alerts))
+        else:
+            send_message(
+                f"*Tharnek*\n\n"
+                f"Sem alteracoes significativas.\n"
+                f"{monitored} produtos monitorizados.\n"
+                f"Alerta quando variacao > {tharnek.ALERT_THRESHOLD}%"
+            )
+
+    # ── MYRONDIS ────────────────────────────────────────────
+    elif cmd == "/seo":
+        article = sylvorn.get_latest_article_content()
+        if not article:
+            send_message("Sem artigos para analisar. Usa /artigo primeiro.")
+            return
+        send_message("*Myrondis* — A analisar SEO...")
+        analysis = myrondis.analyze_article_seo(article)
+        ai_tips = myrondis.get_ai_seo_tips(article)
+        report = myrondis.format_seo_report(article, analysis, ai_tips)
+        myrondis.save_seo_report(article.get("id", ""), analysis)
+        send_message(report)
+
+    elif cmd == "/keywords":
+        send_message(
+            "*Myrondis — Palavras-chave por categoria*\n\n"
+            "Escolhe:\n"
+            "/kw_airfryers\n"
+            "/kw_aspiradores\n"
+            "/kw_robots\n"
+            "/kw_bebe\n"
+            "/kw_animais"
+        )
+
+    elif cmd == "/kw_airfryers":
+        _show_keywords("Air Fryers")
+    elif cmd == "/kw_aspiradores":
+        _show_keywords("Aspiradores Robo")
+    elif cmd == "/kw_robots":
+        _show_keywords("Robots de Cozinha")
+    elif cmd == "/kw_bebe":
+        _show_keywords("Produtos para Bebe")
+    elif cmd == "/kw_animais":
+        _show_keywords("Racoes para Animais")
+
+    # ── KAELVRIS ────────────────────────────────────────────
+    elif cmd == "/posts":
+        article = sylvorn.get_latest_article_content()
+        if not article:
+            send_message("Sem artigos. Cria um com /artigo primeiro.")
+            return
+        send_message("*Kaelvris* — A criar posts para redes sociais...")
+        data = dravek.load_data()
+        if not data:
+            data = dravek.build_curated_products()
+        category = article.get("category", "")
+        top_product = data.get(category, [{}])[0] if data.get(category) else None
+        posts = kaelvris.create_all_posts(article, top_product)
+        send_message(kaelvris.format_posts_for_telegram(posts, "pinterest"))
+        time.sleep(1)
+        send_message(kaelvris.format_posts_for_telegram(posts, "facebook"))
+
+    elif cmd == "/verpost":
+        all_posts = kaelvris.load_posts()
+        if not all_posts:
+            send_message("Sem posts criados. Usa /posts primeiro.")
+            return
+        last = list(all_posts.values())[-1]
+        send_message(kaelvris.format_posts_for_telegram(last))
+
     # ── GERAL ───────────────────────────────────────────────
     elif cmd in ["/resumo", "/status"]:
-        resp = ask_vaelthor("Faz um resumo rapido do estado atual do projeto.")
+        resp = ask_vaelthor("Faz um resumo completo do estado atual do projeto incluindo todos os bots.")
         send_message(f"*Vaelthor*\n\n{resp}")
 
     elif cmd == "/bots":
         articles = sylvorn.load_articles()
+        posts = kaelvris.load_posts()
         data = dravek.load_data()
         products = sum(len(v) for v in data.values()) if data else 100
+        prices = tharnek.load_prices()
         send_message(
-            "*Estado dos Bots*\n\n"
+            "*Estado dos Bots — Sistema Completo*\n\n"
             f"Vaelthor (CEO) — Online\n"
             f"Dravek (Pesquisa) — Ativo | {products} produtos\n"
-            f"Sylvorn (Artigos) — Ativo | {len(articles)} artigos criados\n"
-            "Tharnek (Precos) — Por instalar\n"
-            "Myrondis (SEO) — Por instalar\n"
-            "Kaelvris (Redes) — Por instalar\n\n"
-            "*Proximo passo:* Comprar ranktuga.com + WordPress (~44€)"
+            f"Sylvorn (Artigos) — Ativo | {len(articles)} artigos\n"
+            f"Tharnek (Precos) — Ativo | {len(prices)} produtos monitorizados\n"
+            f"Myrondis (SEO) — Ativo | Pronto para analisar\n"
+            f"Kaelvris (Redes) — Ativo | {len(posts)} posts criados\n\n"
+            "*Proximo passo:* Comprar ranktuga.com + WordPress (~44€/ano)"
         )
 
     elif cmd in ["/ajuda", "/help"]:
@@ -266,46 +316,50 @@ def process_message(text):
 # HELPERS
 # ============================================================
 def _create_article(category_name):
-    send_message(f"*Sylvorn* — A criar artigo sobre *{category_name}*...\nAguarda 2-3 minutos.")
+    send_message(f"*Sylvorn* — A criar artigo: *{category_name}*\nAguarda 2-3 minutos...")
     data = dravek.load_data()
     if not data or category_name not in data:
         data = dravek.build_curated_products()
     products = data.get(category_name, [])
     if not products:
-        send_message(f"Sem produtos para {category_name}. Usa /pesquisar primeiro.")
+        send_message(f"Sem produtos. Usa /pesquisar primeiro.")
         return
+
     article, filename = sylvorn.create_category_article(category_name, products)
-    if article:
-        send_message(
-            f"*Sylvorn* — Artigo criado!\n\n"
-            f"*{article['title'][:60]}*\n"
-            f"_{article['word_count']} palavras | {article['products_count']} produtos comparados_\n\n"
-            f"Usa /ultimoartigo para ver o conteudo completo."
-        )
-    else:
-        send_message("Erro ao criar artigo. Tenta novamente.")
+    if not article:
+        send_message("Erro ao criar artigo.")
+        return
 
-def _save_temp(data):
-    try:
-        with open("temp_products.json", "w", encoding="utf-8") as f:
-            import json
-            json.dump(data, f, ensure_ascii=False)
-    except:
-        pass
+    # Analise SEO automatica
+    analysis = myrondis.analyze_article_seo(article)
+    score = analysis["score"]
+    emoji = "🟢" if score >= 80 else "🟡" if score >= 60 else "🔴"
 
-def _load_temp():
-    try:
-        import json
-        with open("temp_products.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return []
+    send_message(
+        f"*Sylvorn* — Artigo criado!\n\n"
+        f"*{article['title'][:60]}*\n"
+        f"_{article['word_count']} palavras | {article['products_count']} produtos_\n\n"
+        f"{emoji} *SEO Score: {score}/100* (Myrondis)\n\n"
+        f"Usa /seo para analise completa\n"
+        f"Usa /posts para criar posts para redes sociais"
+    )
+
+def _show_keywords(category):
+    kws = myrondis.analyze_keywords(category)
+    if not kws:
+        send_message("Sem palavras-chave para esta categoria.")
+        return
+    lines = [f"*Myrondis — Keywords: {category}*\n"]
+    for i, kw in enumerate(kws, 1):
+        lines.append(f"{i}. `{kw}`")
+    lines.append("\n_Usa estas nos titulos e ao longo dos artigos_")
+    send_message("\n".join(lines))
 
 # ============================================================
 # MAIN
 # ============================================================
 def main():
-    print("Vaelthor v8 (com Sylvorn) a iniciar...")
+    print("Vaelthor — Sistema Completo a iniciar...")
 
     scheduler = BackgroundScheduler()
     scheduler.add_job(daily_summary, 'cron', hour=8, minute=0)
@@ -313,12 +367,13 @@ def main():
     scheduler.start()
 
     send_message(
-        "*Vaelthor v8 online*\n\n"
-        "Sylvorn esta agora ativo — posso criar artigos automaticamente.\n\n"
-        "Usa /artigo para criar o primeiro artigo agora."
+        "*Sistema Ranktuga — Totalmente Operacional*\n\n"
+        "Todos os 6 bots estao online:\n"
+        "Vaelthor Dravek Sylvorn Tharnek Myrondis Kaelvris\n\n"
+        "Usa /ajuda para ver todos os comandos."
     )
 
-    print("Vaelthor v8 online.")
+    print("Sistema completo online.")
 
     offset = None
     while True:
